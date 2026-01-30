@@ -102,7 +102,66 @@ def default_compute_score(
         from . import search_r1_like_qa_em
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+    elif data_source.startswith('longbench_pro_'):
+        # LongBench-Pro tasks
+        from . import longbench_pro
 
+        res = longbench_pro.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
+    elif "keychain" in data_source or "multihop" in data_source:
+        # KeyChain tasks - Long-context reasoning with UUID chains
+        from . import keychain
+
+        res = keychain.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
+    elif "long_toc_choices" in data_source or "longbenchv2" in data_source:
+        # LongBench v2 and long context multiple choice tasks
+        from . import long
+        
+        res = long.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
+    elif "docmath" in data_source:
+        # Document math tasks
+        from . import docmath
+        
+        res = docmath.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
+    elif "multihoprag" in data_source or "musique" in data_source or "frames" in data_source:
+        # Multi-hop QA and document QA tasks
+        from . import docqa
+        
+        res = docqa.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
+    elif "book_ruler" in data_source:
+        # Book RULER multi-key/multi-value tasks
+        from . import bookruler
+        
+        res = bookruler.compute_score(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            task_name=data_source,
+            extra_info=extra_info
+        )
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
