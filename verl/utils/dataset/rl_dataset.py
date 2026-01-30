@@ -25,6 +25,7 @@ from typing import Optional
 
 import datasets
 import numpy as np
+import pandas as pd
 import torch
 from omegaconf import DictConfig, ListConfig
 from PIL import Image
@@ -160,8 +161,13 @@ class RLHFDataset(Dataset):
                 dataframe = datasets.load_dataset("json", data_files=parquet_file)["train"]
             else:
                 raise ValueError(f"Unsupported file format: {parquet_file}")
-            dataframes.append(dataframe)
-        self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
+            
+            # Filter on datasets.Dataset (supports num_proc), then convert to pandas
+            dataframe = self.maybe_filter_out_long_prompts(dataframe)
+            dataframes.append(dataframe.to_pandas())
+        
+        # Use pandas.concat to avoid strict schema checking
+        self.dataframe = pd.concat(dataframes, ignore_index=True).reset_index(drop=True)
 
         total = len(self.dataframe)
         print(f"dataset len: {len(self.dataframe)}")
@@ -173,10 +179,8 @@ class RLHFDataset(Dataset):
                 indices = rng.choice(total, size=self.max_samples, replace=False)
             else:
                 indices = np.arange(self.max_samples)
-            self.dataframe = self.dataframe.select(indices.tolist())
+            self.dataframe = self.dataframe.iloc[indices].reset_index(drop=True)
             print(f"selected {self.max_samples} random samples out of {total}")
-
-        self.dataframe = self.maybe_filter_out_long_prompts(self.dataframe)
 
     def maybe_filter_out_long_prompts(self, dataframe: datasets.Dataset = None):
         # filter out too long prompts
@@ -340,7 +344,7 @@ class RLHFDataset(Dataset):
 
     def __getitem__(self, item):
         """For rollout, apply_chat_template has been moved to AgentLoop, so we only return raw_prompt here."""
-        row_dict: dict = self.dataframe[item]
+        row_dict: dict = self.dataframe.iloc[item].to_dict()
         row_dict["raw_prompt"] = self._build_messages(row_dict)
 
         # TODO(wuxibin): We still need a dummy tensor to make sure DataProto.batch is not empty.
@@ -429,7 +433,7 @@ class RLHFDataset(Dataset):
             start_idx = i * split_size
             end_idx = (i + 1) * split_size if i < num_splits - 1 else total_samples
 
-            split_dataframe = self.dataframe.select(range(start_idx, end_idx))
+            split_dataframe = self.dataframe.iloc[start_idx:end_idx].reset_index(drop=True)
 
             split_dataset = RLHFDataset(
                 data_files=self.data_files,

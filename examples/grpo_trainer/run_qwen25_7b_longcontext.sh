@@ -1,6 +1,9 @@
 set -x
 
-# tested in NNODES=1~4 * GPU
+# WandB Login
+export WANDB_API_KEY="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"
+wandb login --relogin $WANDB_API_KEY
+
 NNODES=${WORLD_SIZE:-1}
 NGPUS_PER_NODES=${NGPUS_PER_NODES:-8}
 
@@ -11,10 +14,10 @@ export WORLD_SIZE=${WORLD_SIZE:-1}
 export RANK=${RANK:-0}
 
 export COMMON_TP=4
-export COMMON_PP=2
+export COMMON_PP=4 # 这里修改成4了，是希望能更快一点，把模型切分的更细一点；
 
-project_name='DAPO-Qwen2.5-7B-Instruct'
-exp_name='DAPO-Qwen2.5-7B-Instruct-megatron'
+project_name='longcontext-rl'
+exp_name='Qwen2.5-7B-Instruct-keychain-mixed'
 
 adv_estimator=grpo
 
@@ -25,8 +28,8 @@ kl_loss_coef=0.0
 
 clip_ratio_low=0.2
 clip_ratio_high=0.28
-max_prompt_length=$((1024 * 2))
-max_response_length=$((1024 * 8))
+max_prompt_length=$((1024 * 20))
+max_response_length=$((1024 * 10))
 enable_overlong_buffer=True
 overlong_buffer_len=$((1024 * 4))
 overlong_penalty_factor=1.0
@@ -42,14 +45,13 @@ infer_ppo_micro_batch_size_per_gpu=2
 MODEL_PATH=/cpfs/user/zhiyuan/models/Qwen/Qwen2.5-7B-Instruct
 
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
-TRAIN_FILE=/cpfs/user/zhiyuan/datasets/BytedTsinghua-SIA/DAPO-Math-17k/data/dapo-math-17k.parquet
-TEST_FILE=/cpfs/user/zhiyuan/datasets/BytedTsinghua-SIA/AIME-2024/data/aime-2024.parquet
+TRAIN_FILE="['/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/2wikimultihop_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/2wikimultihop_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/hotpotqa_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/musique_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/hotpotqa_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/musique_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/mathdapo/dapo_math.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/bookruler/book_ruler_multi_key_mixed.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/bookruler/book_ruler_multi_value_mixed.parquet']"
 
 # Algorithm
-temperature=1.0
-top_p=1.0
+temperature=0.6
+top_p=0.95
 top_k=-1 # 0 for HF rollout, -1 for vLLM rollout
-val_top_p=0.7
+val_top_p=0.95
 
 # Performance Related Parameter
 use_dynamic_bsz=True
@@ -131,7 +133,7 @@ if [ ${RANK} -eq 0 ]; then
     echo "=== Starting training at $(date) ==="
     python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megatron_trainer'\
     data.train_files="${TRAIN_FILE}" \
-    data.val_files="${TEST_FILE}" \
+    data.val_files='/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/2wikimultihop_thinking.parquet' \
     data.prompt_key=prompt \
     data.truncation='left' \
     data.max_prompt_length=${max_prompt_length} \
@@ -155,7 +157,7 @@ if [ ${RANK} -eq 0 ]; then
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${actor_ppo_max_token_len} \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
-    actor_rollout_ref.actor.optim.lr_decay_style='constant' \
+    actor_rollout_ref.actor.optim.lr_decay_style='cosine' \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     +actor_rollout_ref.actor.optim.override_optimizer_config.optimizer_offload_fraction=${optimizer_offload_fraction} \
     +actor_rollout_ref.actor.optim.override_optimizer_config.overlap_cpu_optimizer_d2h_h2d=True \
@@ -208,20 +210,15 @@ if [ ${RANK} -eq 0 ]; then
     actor_rollout_ref.ref.megatron.context_parallel_size=${REF_CP} \
     actor_rollout_ref.ref.megatron.expert_model_parallel_size=${REF_EP} \
     actor_rollout_ref.ref.megatron.expert_tensor_parallel_size=${REF_ETP} \
-    reward_model.reward_manager=dapo \
-    +reward_model.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
-    +reward_model.reward_kwargs.overlong_buffer_cfg.len=${overlong_buffer_len} \
-    +reward_model.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_penalty_factor} \
-    +reward_model.reward_kwargs.overlong_buffer_cfg.log=False \
-    +reward_model.reward_kwargs.max_resp_len=${max_response_length} \
-    trainer.logger=['console'] \
+    reward_model.reward_manager=naive \
+    trainer.logger=['console','wandb'] \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
     trainer.n_gpus_per_node="${NGPUS_PER_NODES}" \
     trainer.nnodes="${NNODES}" \
     trainer.val_before_train=False \
-    trainer.test_freq=10 \
-    trainer.save_freq=100 \
+    trainer.test_freq=-1 \
+    trainer.save_freq=25 \
     trainer.total_epochs=10 \
     trainer.resume_mode=auto \
     trainer.log_val_generations=10 \

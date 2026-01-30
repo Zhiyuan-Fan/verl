@@ -268,5 +268,5 @@ def compute_score(
     return {
         "score": reward,
         "acc": acc,
-        "pred": pred,
+        "format": 1  # just for simplicity
     }
