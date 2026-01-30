@@ -1,8 +1,17 @@
 set -x
 
 # tested in NNODES=1~4 * GPU
-NNODES=${NNODES:-1}
+NNODES=${WORLD_SIZE:-1}
 NGPUS_PER_NODES=${NGPUS_PER_NODES:-8}
+
+#====================环境变量===================
+export MASTER_ADDR=${MASTER_ADDR:-localhost}
+export MASTER_PORT=${MASTER_PORT:-9899}
+export WORLD_SIZE=${WORLD_SIZE:-1}
+export RANK=${RANK:-0}
+
+export COMMON_TP=4
+export COMMON_PP=2
 
 project_name='DAPO-Qwen2.5-7B-Instruct'
 exp_name='DAPO-Qwen2.5-7B-Instruct-megatron'
@@ -29,13 +38,12 @@ n_resp_per_prompt=16
 train_prompt_mini_bsz=128
 train_ppo_micro_batch_size_per_gpu=2
 infer_ppo_micro_batch_size_per_gpu=2
-
 # Paths
-MODEL_PATH=Qwen/Qwen2.5-7B-Instruct
+MODEL_PATH=/cpfs/user/zhiyuan/models/Qwen/Qwen2.5-7B-Instruct
 
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
-TRAIN_FILE=${TRAIN_FILE:-$RAY_DATA_HOME/dataset/dapo-math-17k.parquet}
-TEST_FILE=${TEST_FILE:-$RAY_DATA_HOME/dataset/aime-2024.parquet}
+TRAIN_FILE=/cpfs/user/zhiyuan/datasets/BytedTsinghua-SIA/DAPO-Math-17k/data/dapo-math-17k.parquet
+TEST_FILE=/cpfs/user/zhiyuan/datasets/BytedTsinghua-SIA/AIME-2024/data/aime-2024.parquet
 
 # Algorithm
 temperature=1.0
@@ -59,7 +67,7 @@ COMMON_EP=${COMMON_EP:-1}
 COMMON_ETP=${COMMON_ETP:-1}
 
 TRAIN_TP=${TRAIN_TP:-$COMMON_TP}
-INFER_TP=${INFER_TP:-1}
+INFER_TP=${INFER_TP:-4}
 
 ACTOR_PP=${ACTOR_PP:-$COMMON_PP}
 ACTOR_VPP=${ACTOR_VPP:-$COMMON_VPP}
@@ -92,7 +100,36 @@ RM_ETP=${RM_ETP:-$COMMON_ETP}
 USE_MBRIDGE=True
 USE_DIST_CKPT=False
 
-python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megatron_trainer'\
+# 创建日志目录
+mkdir -p logs
+
+if [ ${RANK} -eq 0 ]; then
+    echo ${MASTER_ADDR}
+    ray start --head
+    echo "Waiting for all ${WORLD_SIZE} nodes to connect..."
+    start_time=$(date +%s)
+    
+    # 等待所有节点连接
+    while true; do
+        total_nodes=$(ray list nodes 2>/dev/null | grep "Total:" | awk '{print $2}' || echo "0")
+        echo "Connected nodes: ${total_nodes}/${WORLD_SIZE}"
+        if [ "$total_nodes" -ge "$WORLD_SIZE" ]; then
+            echo "All nodes connected! Starting training..."
+            break
+        fi
+        
+        current_time=$(date +%s)
+        elapsed_time=$((current_time - start_time))
+        if [ $elapsed_time -gt 1000 ]; then
+            echo "Warning: Not all nodes connected within timeout. Proceeding anyway."
+            break
+        fi
+        sleep 5
+    done
+    
+    # 开始训练
+    echo "=== Starting training at $(date) ==="
+    python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megatron_trainer'\
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${TEST_FILE}" \
     data.prompt_key=prompt \
@@ -158,7 +195,7 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     actor_rollout_ref.rollout.val_kwargs.top_k=${top_k} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.n=1 \
-    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.enforce_eager=True \
     actor_rollout_ref.rollout.free_cache_engine=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=${infer_ppo_micro_batch_size_per_gpu} \
@@ -177,7 +214,7 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     +reward_model.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_penalty_factor} \
     +reward_model.reward_kwargs.overlong_buffer_cfg.log=False \
     +reward_model.reward_kwargs.max_resp_len=${max_response_length} \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['console'] \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
     trainer.n_gpus_per_node="${NGPUS_PER_NODES}" \
@@ -187,4 +224,47 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     trainer.save_freq=100 \
     trainer.total_epochs=10 \
     trainer.resume_mode=auto \
-    trainer.log_val_generations=10
+    trainer.log_val_generations=10 \
+    2>&1 | tee logs/${exp_name}_${MASTER_ADDR}_log_${RANK}_$(date +%Y%m%d_%H%M%S).txt
+    
+    echo "=== Training finished at $(date) ==="
+
+else
+    echo "On worker node (RANK=${RANK})"
+    echo "Connecting to master at: ${MASTER_ADDR}"
+
+    # 检查head节点是否准备就绪
+    head_ready=0
+    retry_count=0
+    max_retries=600
+
+    echo "Checking if Ray head node is ready..."
+    while [ ${head_ready} -eq 0 ] && [ ${retry_count} -lt ${max_retries} ]; do
+        if nc -z ${MASTER_ADDR} 6379 2>/dev/null; then
+            echo "Ray head node is ready. Connecting..."
+            head_ready=1
+        else
+            retry_count=$((retry_count + 1))
+            echo "Ray head node not ready (attempt ${retry_count}/${max_retries}). Retrying in 5 seconds..."
+            sleep 5
+        fi
+    done
+
+    if [ ${head_ready} -eq 0 ]; then
+        echo "ERROR: Ray head node not available after ${max_retries} attempts. Exiting."
+        exit 1
+    fi
+
+    # 连接到Ray head节点
+    ray start --address=${MASTER_ADDR}:6379
+
+    # Worker节点等待训练完成
+    echo "Connected to head node. Waiting for training to complete..."
+    PORT_RAY=$(netstat -ntlp | grep "/ray")
+    while [ -n "${PORT_RAY}" ]; do
+        sleep 60s
+        PORT_RAY=$(netstat -ntlp | grep "/ray")
+    done
+    echo "Training complete. Stopping Ray..."
+    ray stop --force
+fi
