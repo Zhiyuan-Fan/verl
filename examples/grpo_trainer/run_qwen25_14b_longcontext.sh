@@ -13,11 +13,11 @@ export MASTER_PORT=${MASTER_PORT:-9899}
 export WORLD_SIZE=${WORLD_SIZE:-1}
 export RANK=${RANK:-0}
 
-export COMMON_TP=4
-export COMMON_PP=2 #这里设置到4之后，就是会出问题，直接爆掉；
+export COMMON_TP=8
+export COMMON_PP=2 #这里设置到4之后，就是会出问题，nccl直接超时；
 
 project_name='longcontext-rl'
-exp_name='Qwen2.5-7B-Instruct-keychain-mixed'
+exp_name='Qwen2.5-14B-Instruct-keychain-mixed'
 
 adv_estimator=grpo
 
@@ -36,13 +36,13 @@ overlong_penalty_factor=1.0
 
 loss_agg_mode="token-mean"
 
-train_prompt_bsz=512
+train_prompt_bsz=256
 n_resp_per_prompt=8
-train_prompt_mini_bsz=128
+train_prompt_mini_bsz=64
 train_ppo_micro_batch_size_per_gpu=2
 infer_ppo_micro_batch_size_per_gpu=2
 # Paths
-MODEL_PATH=/cpfs/user/zhiyuan/models/Qwen/Qwen2.5-7B-Instruct
+MODEL_PATH=/cpfs/user/zhiyuan/models/Qwen/Qwen2.5-14B-Instruct
 
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
 TRAIN_FILE="['/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/2wikimultihop_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/2wikimultihop_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/hotpotqa_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/keychain/musique_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/hotpotqa_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/loongrl/dataset_synthesis/training_data/multihop/musique_thinking.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/mathdapo/dapo_math.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/bookruler/book_ruler_multi_key_mixed.parquet','/cpfs/user/zhiyuan/workspace/long-ctx-rl/repos/longctx-rl/bookruler/book_ruler_multi_value_mixed.parquet']"
