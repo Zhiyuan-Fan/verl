@@ -209,6 +209,27 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
 
+    # per data_source reward stats (mean/max/min) on non-aborted samples
+    if "data_source" in batch.non_tensor_batch:
+        data_sources = batch.non_tensor_batch["data_source"]
+        # ensure list-like length matches batch size
+        if len(data_sources) == sequence_reward.shape[0]:
+            data_source_to_rewards: dict[str, list[float]] = defaultdict(list)
+            for idx, data_source in enumerate(data_sources):
+                if not non_aborted_mask[idx].item():
+                    continue
+                data_source_to_rewards[str(data_source)].append(
+                    sequence_reward[idx].detach().item()
+                )
+
+            for data_source, rewards in data_source_to_rewards.items():
+                if len(rewards) == 0:
+                    continue
+                rewards_np = np.asarray(rewards, dtype=np.float32)
+                metrics[f"critic/rewards_by_source/{data_source}/mean"] = float(rewards_np.mean())
+                metrics[f"critic/rewards_by_source/{data_source}/max"] = float(rewards_np.max())
+                metrics[f"critic/rewards_by_source/{data_source}/min"] = float(rewards_np.min())
+
     # multi-turn conversation
     if "__num_turns__" in batch.non_tensor_batch:
         num_turns = batch.non_tensor_batch["__num_turns__"]
